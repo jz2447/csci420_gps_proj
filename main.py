@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 def main():
 
 
-    folder_path = Path("Some_Example_GPS_Files 2/") # Replace with the actual path
+    folder_path = Path("Some_Example_GPS_Files/") # Replace with the actual path
     for file_path in folder_path.iterdir():
         if file_path.is_file(): 
             try:
