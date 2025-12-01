@@ -1,33 +1,51 @@
 #Names: Vivian Hernandez & Jenny Zheng
 
+from collections import Counter
 import datetime
 import re
 import math
+import sys
 import simplekml
 from pathlib import Path
-from datetime import timezone
+from datetime import timedelta, timezone
 
 ######### STEP 1: Read File #########
-def readFile():
-    folder_path = Path("Some_Example_GPS_Files/") 
+def readFile(file_path):
+    # folder_path = Path(""Some_Example_GPS_Files/") ")
     gps_data = []  # []format 
 
-    for file_path in folder_path.iterdir():
+    # for file_path in folder_path.iterdir():
 
-        if file_path.is_file() and file_path.name.startswith("2025_"):#Every file starts with 2025
-            try:
-                with open(file_path, 'r', encoding='latin1') as f:
-                    lines = f.read().splitlines()  
-                    temp_arr = []
-                    for line in lines[5:]: #Skip teh first 5 lines 
-                        if not line.strip():
-                            continue
-                        parts = line.split(',') #Splits the data by comma
-                        parts = [p if p != '' else '0' for p in parts] #makes this an array for the line 
-                        temp_arr.append(parts)
-                    gps_data.append(temp_arr)
-            except Exception as e:
-                print(f"Error reading {file_path.name}: {e}")
+    # if file_path.is_file() and file_path.name.startswith("2025_"):#Every file starts with 2025
+    try:
+        with open(file_path, 'r', encoding='latin1') as f:
+            lines = f.read().splitlines()  
+            temp_arr = []
+            for line in lines[5:]: #Skip teh first 5 lines 
+                if not line.strip():
+                    continue
+                
+                # ignore lines with burped gps data
+                count = line.count("$GP")
+                if count > 1:
+                    print("double found")
+                    # print(line)
+                    # parts_list = re.findall(r'(\$GP[^$\r\n]*)', line)
+                    # for sent in parts_list:
+                    #     fields = sent.split(',')
+                    #     fields = [p if p != '' else '0' for p in fields]
+                    #     temp_arr.append(fields)
+                    continue
+
+
+                parts = line.split(',') #Splits the data by comma
+                # print(parts)
+                
+                parts = [p if p != '' else '0' for p in parts] #makes this an array for the line 
+                temp_arr.append(parts)
+            gps_data.append(temp_arr)
+    except Exception as e:
+        print(f"Error reading {file_path}: {e}")
 
     
     # print(gps_data[0]) #EXAMPLE
@@ -39,7 +57,9 @@ def readFile():
 ####  HELPER FUNCT ####
 
 def safe_float(value):
+    # removes any character that isn't a digit or a decimal point 
     cleaned = re.sub(r"[^0-9.]", "", value)
+    # returns the cleaned string as a float, otherwise 0.0 if empty str
     return float(cleaned) if cleaned else 0.0
 
 def clean_nmea_field(gps):
@@ -49,23 +69,28 @@ def clean_nmea_field(gps):
 
 def nmea_to_decimal(value, direction):
     """
-    Converts NMEA ddmm.mmmm to decimal degrees
+    Converts NMEA ddmm.mmmm (dd is the degrees, mm.mmmm is the decimal minutes)
+    to decimal degrees
     Example: 4308.4726, 'N' → 43.141210
 
     Note: value has to be in str formay 
           NMEA format is fixed -> (d)ddmm.mmmm.
     """
     if '.' in value:
-        #
+        # must have a . for valid NMEA format
         dec_pos = value.find('.')
-        min_start = dec_pos - 2
+        min_start = dec_pos - 2     # last 2 digits before the deimial are the degrees
+        # extract the degrees, index 0 to wherever min_start is
         degrees_part = safe_float(value[:min_start])
+        # this gets the minutes part 
         min_part = float(value[min_start:])
 
+        # convert to decimal by converting the minutes to decimal and adding degrees
         dec_degrees = degrees_part + (min_part / 60.0)
     else:
-        return None #Case: No . found
+        return None #Case: No . found, likely an invalid format
    
+    # negate if sourth or west -- standard gps convention
     if direction in ["S", "W"]:
         dec_degrees *= -1
 
@@ -81,7 +106,7 @@ def convert_utc(time):
 
 def date_time_conversion(date, time):
     """
-    Converts 
+    Converts to date time format
     """
     date = clean_nmea_field(date)
     time = clean_nmea_field(time)
@@ -106,28 +131,80 @@ def date_time_conversion(date, time):
 def degree_turn(p1, p2):
     """
     Returns turn degrees from point1 to point2
+    0 = north
+    90 = east
+    180 = south
+    270 = west
     """
+    # convert degrees to radians
     lat1, lon1 = math.radians(p1[0]), math.radians(p1[1])
     lat2, lon2 = math.radians(p2[0]), math.radians(p2[1])
-    
+    # get the difference in longitude between the two points
     dlon = lon2 - lon1
+    # calculates the east-west component of the bearing
     x = math.sin(dlon) * math.cos(lat2)
+    # calculates the north-south component of the bearing 
     y = math.cos(lat1)*math.sin(lat2) - math.sin(lat1)*math.cos(lat2)*math.cos(dlon)
-    
+    # calcluate the angle from north clockwise to the (x,y) point 
     brng = math.atan2(x, y)
+    # convert back to degrees
     brng = math.degrees(brng)
-
+    # ensures result is positive 
     return (brng + 360) % 360
 
-def turn_direction(p1, p2, p3):
-    b1 = degree_turn(p1, p2)
-    b2 =degree_turn(p2, p3)
-    diff = (b2 - b1 + 360) % 360
+def haversine_m(lat1, lon1, lat2, lon2):
+    R = 6371000.0   # earth's radius in meters
+    lat1_rad = math.radians(lat1)
+    lat2_rad = math.radians(lat2)
+    diff_lat = math.radians(lat2-lat1)
+    diff_lon = math.radians(lon2 - lon1)
 
-    if diff > 10 and diff < 180:
-        return "left"
-    elif diff > 180 and diff < 350:
+    a = math.sin(diff_lat)**2 + math.cos(lat1_rad)*math.cos(lat2_rad)*math.sin(diff_lon/2)**2
+
+    return 2 * R * math.atan2(math.sqrt(a), math.sqrt(1-a))
+
+def signed_bearing_delta(bearing1, bearing2):
+    # returns signed delta in degrees in range -180 and 180
+    # Postive = right turn, Negative = left turn
+    delta = (bearing2 - bearing1 + 540) % 360 - 180
+    return delta
+
+def turn_direction(p1, p2, p3, threshold_deg = 10.0, min_dist = 3.0):
+    '''
+    p1,p2,p3 are tuples (lat, lon)
+    threshold_deg: minimum absolute bearing change to consider a turn
+    min_dist: minimum meters between points to avoid noisy bearings
+    TODO: if too many false turns raise thresh to 20-30 or increase min dist
+    if we start missing gentle turns, lower the threshold
+    '''
+    lat1, lon1 = p1
+    lat2, lon2 = p2
+    lat3, lon3 = p3
+
+    # skip if points are too close
+    if haversine_m(lat1, lon1, lat2, lon2) < min_dist:
+        return "straight"
+    if haversine_m(lat2, lon2, lat3, lon3) < min_dist:
+        return "straight"
+
+    b1 = degree_turn(p1, p2)    # bearing from p1 to p2
+    b2 = degree_turn(p2, p3)    # bearing from p2 to p3
+
+    # diff = (b2 - b1 + 360) % 360    # change in bearing in degrees 
+
+    # if diff > 10 and diff < 180:
+    #     return "left"
+    # elif diff > 180 and diff < 350:
+    #     return "right"
+    # else:
+    #     return "straight"
+
+    delta = signed_bearing_delta(b1, b2)
+    
+    if delta > threshold_deg:
         return "right"
+    elif delta < -threshold_deg:
+        return "left"
     else:
         return "straight"
 
@@ -211,6 +288,114 @@ def read_gpgga(arr):
     }
 
 
+def get_start_and_end_index(all_info):
+    """
+    returns the start and end index of when the car first starts moving and 
+    last stops moving
+    Note: speed is in knots
+    """
+    # using 0.8 m/s or 1.55 knots for the threshold for moving vehicles
+    MOVING = 1.55 
+    start = None
+    end = None
+    for index, info in enumerate(all_info):
+        if info["speed"] > MOVING:
+            start = index
+            print(info)
+            break
+    
+    for index, info in enumerate(reversed(all_info)):
+        if info["speed"] > MOVING:
+            end = len(all_info) - index
+            break
+    
+    # use the points right before and right after motion detected
+    if start != 0:
+        start -= 1
+
+    return start, end
+
+def estimate_start(all_info, start_index):
+    """
+    This will estimate the last potential gps reading that was supposed to happen 
+    by grabbing the differencce in seconds between the start index and the next 
+    gps reading
+    TODO: change this if we figure out a better way to estimate missing time...
+
+    my thought process here is that its impossible to get the full missing duration
+    since we don't know where the gps location is supposed to start so at best, we
+    can use the starting speed and the time between gps readings to estimate the previous 
+    missing gps reading. actually, speed might not even be helpful here since i think 
+    the use of speed in estimation would maybe get us location and that isn't what's
+    really being asked here...so...this is the best I got...u got this vivian
+
+    Returns: the difference in seconds between the starting index point and the 
+    one after it 
+    """
+    # this means the first point is moving, use next point to help estimate time
+    p1 = all_info[start_index]
+    p2 = all_info[start_index+1]
+
+    p1_dt = datetime.datetime.strptime(p1["date_time"], "%Y-%m-%dT%H:%M:%SZ")
+    p2_dt = datetime.datetime.strptime(p2["date_time"], "%Y-%m-%dT%H:%M:%SZ")
+
+    print(p1_dt)
+    print(p2_dt)
+
+    dt_seconds = p2_dt - p1_dt
+    # print(dt_seconds)
+
+    # if dt_seconds > 0:
+        # estimate the time it took to cover the distance between these two points at first speed
+    # est_start = p1_dt - timedelta(dt_seconds)
+
+    print("estimated time missing at start: ", dt_seconds )
+
+    return dt_seconds
+    
+
+def estimate_end(all_info, end_index):
+    """
+    use the current ending index and the index before it to estimate the missing 
+    data in front of it. 
+    see estimate_start function description for more on my thought process
+
+    Returns: the difference in seconds between the end index and the gps reading 
+    before it 
+    """
+    p1 = all_info[end_index]
+    p2 = all_info[end_index -1]
+    # get the datetime values of the two points we are comparing 
+    p1_dt = datetime.datetime.strptime(p1["date_time"], "%Y-%m-%dT%H:%M:%SZ")
+    p2_dt = datetime.datetime.strptime(p2["date_time"], "%Y-%m-%dT%H:%M:%SZ")
+
+    # time difference between the two points
+    dt_seconds = (p2_dt - p1_dt)
+
+    print("estimated time missing at end: ", dt_seconds )
+
+    return dt_seconds
+
+def is_jump(prev, curr, max_speed = 97):
+    """
+    prev, curr: tuples of (lat, lon, datetime)
+    max_speed_m_s: maximum plausible speed in m/s
+    """
+    # 97 knots is approx 50 m/s
+    dist = haversine_m(prev[0], prev[1], curr[0], curr[1])
+    time_diff = (curr[2] - prev[2]).total_seconds()
+    # print(time_diff)
+    
+    if time_diff == 0:
+        return True  # duplicate timestamp
+    
+    speed = dist / time_diff  # meters per second
+    if speed > max_speed:
+        return True  # unrealistically fast -> ignore
+    return False
+
+
+
 
 #### MAIN FILE #####
 def makeKMLFile(gps_data,num):
@@ -218,11 +403,17 @@ def makeKMLFile(gps_data,num):
     
     array of arrays
     """
+    STOP_SPEED = 1.0
+    MIN_STOP = 1.0
+    MOVING = 1.55
     kml = simplekml.Kml()
  
     #Read in the gps info 
     route_coords = []
     all_info =[]
+    # track previous point
+    prev_point = None
+
     for arr in gps_data:
 
         if arr[0].endswith("GPRMC"):
@@ -230,14 +421,39 @@ def makeKMLFile(gps_data,num):
 
             if rmc is None:
                 continue 
+
+            # ignore impossible lat/long
+            p_lon, p_lat = rmc["longitude"], rmc["latitude"]
+            if not (-90 <= p_lat <= 90 and -180 <= p_lon <= 180):
+                continue
+
+            # ignore big jumps
+            dt = datetime.datetime.strptime(rmc["date_time"], "%Y-%m-%dT%H:%M:%SZ")
+            curr_point = (p_lat, p_lon, dt)
+            if prev_point and is_jump(prev_point, curr_point):
+                print("Ignored jump at:", rmc["date_time"])
+                continue
+
             route_coords.append((rmc["longitude"], rmc["latitude"]))
             all_info.append(rmc)
+            prev_point = curr_point
+
+    # TODO: double check this, this is supposed to make it so that we start the 
+    # duration count when the car first starts moving and when the car first stops moving
+    moving_start, moving_end = get_start_and_end_index(all_info)
+    print(moving_start)
+    print(moving_end)
+    all_info = all_info[moving_start:moving_end+1]
+    route_coords = route_coords[moving_start:moving_end+1]
+
+    print("speed at start: ", all_info[0]["speed"])
+    print("speed at end: ", all_info[-1]["speed"])
 
 
     # A. A yellow line along the route of travel - Compl Below 
     line = kml.newlinestring(name="GPS Route")
     line.coords = route_coords
-    line.extrude = 1 #Task: tell google earch to draw line to ground 
+    line.extrude = 1 #Task: tell google earth to draw line to ground 
 
     # B. Do not worry about the altitude. You can set that a 3 meters or something fixed.
     line.altitudemode = simplekml.AltitudeMode.clamptoground #Task: tell gooogle earth how to view
@@ -246,8 +462,55 @@ def makeKMLFile(gps_data,num):
     line.style.linestyle.width = 3
     line.style.linestyle.color = simplekml.Color.yellow
 
+    # Mark the start and end of the route with green(start) and blue(end)
+    # TODO remove this if necessary for submission
+    if all_info:
+        start = all_info[0]
+        end = all_info[-1]
+        start_mov = False
+        end_mov = False
+        missing_s = timedelta(0,0,0,0,0,0,0)
+        missing_e = timedelta(0,0,0,0,0,0,0)
 
+        # check to see if the gps file started or stopped while the car is in motion
+        if start["speed"] > MOVING:
+            print("GPS file started while the car was in motion")
+            start_mov = True
+        if end["speed"] > MOVING:
+            print("GPS file ended while the car was in motion")
+            end_mov = True
 
+        start_pt = kml.newpoint(
+            name="Start",
+            coords=[(start["longitude"], start["latitude"])],
+        )
+        start_pt.style.iconstyle.color = simplekml.Color.green
+        start_pt.style.iconstyle.scale = 1.3
+        start_pt.description = f"Start time: {start['date_time']}"
+
+        end_pt = kml.newpoint(
+            name="End",
+            coords=[(end["longitude"], end["latitude"])],
+        )
+        end_pt.style.iconstyle.color = simplekml.Color.blue
+        end_pt.style.iconstyle.scale = 1.3
+        end_pt.description = f"End time: {end['date_time']}"
+
+        if start_mov:
+            missing_s = estimate_start(all_info, 0)
+        if end_mov:
+            missing_e = estimate_end(all_info, -1)
+
+        # get the trip duration as the first and last gps data 
+        start_dt = datetime.datetime.strptime(start["date_time"], "%Y-%m-%dT%H:%M:%SZ")
+        end_dt =  datetime.datetime.strptime(end["date_time"], "%Y-%m-%dT%H:%M:%SZ")
+        trip_duration = end_dt - start_dt + missing_e + missing_s
+        print("Trip started at: ", start_dt)
+        print("Trip ended at: ", end_dt)
+        print("Total driving time: ", trip_duration)
+
+    # variable to hold last marker location 
+    last_marker = None
     # D. A yellow marker if the car made a left turn.
     for i in range(len(route_coords )-2):
         p1 = (route_coords [i][1],route_coords [i][0])  # lat, lon
@@ -258,13 +521,16 @@ def makeKMLFile(gps_data,num):
         
         if direction == "left":
             lon, lat= route_coords [i+1]
-            point = kml.newpoint(name="Left Turn", coords=[(lon, lat)])
-            point.style.iconstyle.color = simplekml.Color.yellow
+            # only add a new left turn marker if the distance between the new marker and the prev marker is greater than 5 meters
+            if not last_marker or haversine_m(lat, lon, last_marker[0], last_marker[1]) > 10:
+                last_marker = (lat, lon)
+                point = kml.newpoint(name="Left Turn", coords=[(lon, lat)])
+                point.style.iconstyle.color = simplekml.Color.yellow
+                point.altitudemode = simplekml.AltitudeMode.clamptoground
+
     
     # C. A red marker if the car stopped for a stop sign or traffic light.
         # C. A red marker if the car stopped for a stop sign or traffic light.
-    STOP_SPEED = 1.0
-    MIN_STOP = 1.0
     current_stop = []
 
 
@@ -302,15 +568,31 @@ def main():
     Main
 
     """
-    data = readFile()
+    # data = readFile(sys.argv[1:])
+    # data = readFile()
+    # data = readFile("Some_Example_GPS_Files/2025_05_01__145019_gps_file.txt")
+    # data = readFile("Some_Example_GPS_Files/2025_05_06__021707_gps_file.txt")
+    data = readFile("Some_Example_GPS_Files/2025_05_06__134918_gps_file.txt")
+    # data = readFile("Some_Example_GPS_Files/2025_05_06__174741_gps_file.txt")
+    # data = readFile("Some_Example_GPS_Files/2025_05_06__211533_gps_file.txt")
+    # data = readFile("Some_Example_GPS_Files/2025_08_27__144259_gps_file.txt")
+    # data = readFile("Some_Example_GPS_Files/2025_08_27__171823_gps_file.txt")
+    # data = readFile("Some_Example_GPS_Files/2025_08_27__225846_gps_file.txt")
+    # data = readFile("Some_Example_GPS_Files/2025_09_02__134904_gps_file.txt")
+    # data = readFile("Some_Example_GPS_Files/2025_09_05__160041_gps_file.txt")
+    # data = readFile("Some_Example_GPS_Files/2025_09_07__195700_gps_file.txt")
+    # data = readFile("Some_Example_GPS_Files/2025_09_08__223135_gps_file.txt")
+    # data = readFile("Some_Example_GPS_Files/2025_09_08__Home_to_RIT.txt")
+    # data = readFile("Some_Example_GPS_Files/2025_09_10__172025_gps_file.txt")
+    # data = readFile("Some_Example_GPS_Files/2025_09_10__230616_gps_file.txt")
+    # data = readFile("Some_Example_GPS_Files/2025_09_11__221355_gps_file.txt")
     num = 1
     
     for arr in data: 
         makeKMLFile(arr,num)
         num = num +1
-    
-
 
 
 if __name__ == "__main__":
     main()
+    
