@@ -395,6 +395,42 @@ def is_jump(prev, curr, max_speed = 97):
     return False
 
 
+def filter_route(route_coords):
+    """
+     if vehicle is traveling nearly straight, you can ignore some points on the line
+
+     keep the first and last point and any point where the bearing changes significantly 
+    """
+    threshold = 3.0
+    # if we only have 3 points, we keep them all
+    if len(route_coords) < 3:
+        return route_coords
+    
+    filtered = [route_coords[0]]
+
+    for i in range(1, len(route_coords) - 2):
+        p1 = (route_coords [i][1],route_coords [i][0])  # lat, lon
+        p2 = (route_coords [i+1][1], route_coords [i+1][0])
+        p3 = (route_coords [i+2][1], route_coords [i+2][0])
+
+        bearing1 = degree_turn(p1, p2)
+        bearing2 = degree_turn(p2, p3)
+
+        deg_change = abs(signed_bearing_delta(bearing1, bearing2))
+
+        if deg_change >= threshold:
+            filtered.append(route_coords[i])
+
+        # direction = turn_direction(p1, p2, p3)
+
+        # if direction != "straight":
+        #     filtered.append(route_coords[i])
+
+    filtered.append(route_coords[-1])
+
+    return filtered
+
+
 
 
 #### MAIN FILE #####
@@ -431,7 +467,7 @@ def makeKMLFile(gps_data,num):
             dt = datetime.datetime.strptime(rmc["date_time"], "%Y-%m-%dT%H:%M:%SZ")
             curr_point = (p_lat, p_lon, dt)
             if prev_point and is_jump(prev_point, curr_point):
-                print("Ignored jump at:", rmc["date_time"])
+                # print("Ignored jump at:", rmc["date_time"])
                 continue
 
             route_coords.append((rmc["longitude"], rmc["latitude"]))
@@ -448,6 +484,14 @@ def makeKMLFile(gps_data,num):
 
     print("speed at start: ", all_info[0]["speed"])
     print("speed at end: ", all_info[-1]["speed"])
+
+    print("size of the route_coords: ", len(route_coords))
+
+    # TODO here is where i would put the simplify route function -- issue here is that 
+    # after filtering out some of the straight points, it no longer follows the curve of the road
+    # route_coords = filter_route(route_coords)
+
+    print("size of the route_coords: ", len(route_coords))
 
 
     # A. A yellow line along the route of travel - Compl Below 
@@ -570,9 +614,9 @@ def main():
     """
     # data = readFile(sys.argv[1:])
     # data = readFile()
-    # data = readFile("Some_Example_GPS_Files/2025_05_01__145019_gps_file.txt")
+    data = readFile("Some_Example_GPS_Files/2025_05_01__145019_gps_file.txt")
     # data = readFile("Some_Example_GPS_Files/2025_05_06__021707_gps_file.txt")
-    data = readFile("Some_Example_GPS_Files/2025_05_06__134918_gps_file.txt")
+    # data = readFile("Some_Example_GPS_Files/2025_05_06__134918_gps_file.txt")
     # data = readFile("Some_Example_GPS_Files/2025_05_06__174741_gps_file.txt")
     # data = readFile("Some_Example_GPS_Files/2025_05_06__211533_gps_file.txt")
     # data = readFile("Some_Example_GPS_Files/2025_08_27__144259_gps_file.txt")
