@@ -600,7 +600,6 @@ def main():
         print("Missing the gps file. Try again.")
 
 
-    # data = readFile()
     # data = readFile("Some_Example_GPS_Files/2025_05_01__145019_gps_file.txt")       # home to rit
     # data = readFile("Some_Example_GPS_Files/2025_05_06__021707_gps_file.txt")           # started while in motion, rit to home
     # data = readFile("Some_Example_GPS_Files/2025_05_06__134918_gps_file.txt")           # home to rit w funky jumps (taken care of)
