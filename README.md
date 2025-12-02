@@ -21,3 +21,7 @@ How will you meet the requirements of the assignment?
 
 
 may need to pip install simplekml
+
+
+Run file via command line:
+python main.py "Some_Example_GPS_Files/2025_05_01__145019_gps_file.txt"

@@ -9,14 +9,19 @@ import simplekml
 from pathlib import Path
 from datetime import timedelta, timezone
 
+# RIT's (lat, lon)
+RIT = (43.085556, -77.680556)
+# Prof's Home
+HOUSE = (43.139444, -77.439444)
+
+# max number of points 
+MAX_POINTS = 10000
+
+
 ######### STEP 1: Read File #########
 def readFile(file_path):
-    # folder_path = Path(""Some_Example_GPS_Files/") ")
     gps_data = []  # []format 
 
-    # for file_path in folder_path.iterdir():
-
-    # if file_path.is_file() and file_path.name.startswith("2025_"):#Every file starts with 2025
     try:
         with open(file_path, 'r', encoding='latin1') as f:
             lines = f.read().splitlines()  
@@ -28,7 +33,7 @@ def readFile(file_path):
                 # ignore lines with burped gps data
                 count = line.count("$GP")
                 if count > 1:
-                    print("double found")
+                    # print("double found")
                     # print(line)
                     # parts_list = re.findall(r'(\$GP[^$\r\n]*)', line)
                     # for sent in parts_list:
@@ -295,13 +300,13 @@ def get_start_and_end_index(all_info):
     Note: speed is in knots
     """
     # using 0.8 m/s or 1.55 knots for the threshold for moving vehicles
-    MOVING = 1.55 
+    MOVING = 2
     start = None
     end = None
     for index, info in enumerate(all_info):
+        # print(info)
         if info["speed"] > MOVING:
             start = index
-            print(info)
             break
     
     for index, info in enumerate(reversed(all_info)):
@@ -315,73 +320,44 @@ def get_start_and_end_index(all_info):
 
     return start, end
 
-def estimate_start(all_info, start_index):
+def estimate_missing(all_info, index):
     """
-    This will estimate the last potential gps reading that was supposed to happen 
-    by grabbing the differencce in seconds between the start index and the next 
-    gps reading
-    TODO: change this if we figure out a better way to estimate missing time...
-
-    my thought process here is that its impossible to get the full missing duration
-    since we don't know where the gps location is supposed to start so at best, we
-    can use the starting speed and the time between gps readings to estimate the previous 
-    missing gps reading. actually, speed might not even be helpful here since i think 
-    the use of speed in estimation would maybe get us location and that isn't what's
-    really being asked here...so...this is the best I got...u got this vivian
-
-    Returns: the difference in seconds between the starting index point and the 
-    one after it 
+    get the distance from the current index to the closest location (home or rit)
+    and then calculate how long it would have taken to go from current location to
+    the closest location at the current speed
     """
-    # this means the first point is moving, use next point to help estimate time
-    p1 = all_info[start_index]
-    p2 = all_info[start_index+1]
-
-    p1_dt = datetime.datetime.strptime(p1["date_time"], "%Y-%m-%dT%H:%M:%SZ")
-    p2_dt = datetime.datetime.strptime(p2["date_time"], "%Y-%m-%dT%H:%M:%SZ")
-
-    print(p1_dt)
-    print(p2_dt)
-
-    dt_seconds = p2_dt - p1_dt
-    # print(dt_seconds)
-
-    # if dt_seconds > 0:
-        # estimate the time it took to cover the distance between these two points at first speed
-    # est_start = p1_dt - timedelta(dt_seconds)
-
-    print("estimated time missing at start: ", dt_seconds )
-
-    return dt_seconds
+    current = all_info[index]
+    # speed in knots
+    speed = current["speed"]
     
+    dist_to_rit = haversine_m(current["latitude"], current["longitude"], RIT[0], RIT[1])
 
-def estimate_end(all_info, end_index):
-    """
-    use the current ending index and the index before it to estimate the missing 
-    data in front of it. 
-    see estimate_start function description for more on my thought process
+    dist_to_home = haversine_m(current["latitude"], current["longitude"], HOUSE[0], HOUSE[1])
 
-    Returns: the difference in seconds between the end index and the gps reading 
-    before it 
-    """
-    p1 = all_info[end_index]
-    p2 = all_info[end_index -1]
-    # get the datetime values of the two points we are comparing 
-    p1_dt = datetime.datetime.strptime(p1["date_time"], "%Y-%m-%dT%H:%M:%SZ")
-    p2_dt = datetime.datetime.strptime(p2["date_time"], "%Y-%m-%dT%H:%M:%SZ")
+    # get min dist in meters 
+    min_dist = min(dist_to_rit, dist_to_home)
 
-    # time difference between the two points
-    dt_seconds = (p2_dt - p1_dt)
+    # print("min dist: ", min_dist)
 
-    print("estimated time missing at end: ", dt_seconds )
+    # speed in meters per second
+    speed_ms = speed * 1852 / 3600
 
-    return dt_seconds
+    # print("meters per second: ", speed_ms)
+
+    # get the time traveled in seconds
+    seconds = min_dist/ speed_ms
+
+    return datetime.timedelta(seconds=seconds)
+
+    
 
 def is_jump(prev, curr, max_speed = 97):
     """
     prev, curr: tuples of (lat, lon, datetime)
-    max_speed_m_s: maximum plausible speed in m/s
+    max_speed: maximum plausible speed
     """
     # 97 knots is approx 50 m/s
+    # TODO maybe this needs to be swapped
     dist = haversine_m(prev[0], prev[1], curr[0], curr[1])
     time_diff = (curr[2] - prev[2]).total_seconds()
     # print(time_diff)
@@ -434,14 +410,14 @@ def filter_route(route_coords):
 
 
 #### MAIN FILE #####
-def makeKMLFile(gps_data,num):
+def makeKMLFile(gps_data):
     """
     
     array of arrays
     """
     STOP_SPEED = 1.0
     MIN_STOP = 1.0
-    MOVING = 1.55
+    MOVING = 2
     kml = simplekml.Kml()
  
     #Read in the gps info 
@@ -461,6 +437,7 @@ def makeKMLFile(gps_data,num):
             # ignore impossible lat/long
             p_lon, p_lat = rmc["longitude"], rmc["latitude"]
             if not (-90 <= p_lat <= 90 and -180 <= p_lon <= 180):
+                # print("removed for impossible lat/lon: ", rmc)
                 continue
 
             # ignore big jumps
@@ -468,6 +445,7 @@ def makeKMLFile(gps_data,num):
             curr_point = (p_lat, p_lon, dt)
             if prev_point and is_jump(prev_point, curr_point):
                 # print("Ignored jump at:", rmc["date_time"])
+                # print("removed for big jumps: ", rmc)
                 continue
 
             route_coords.append((rmc["longitude"], rmc["latitude"]))
@@ -477,34 +455,35 @@ def makeKMLFile(gps_data,num):
     # TODO: double check this, this is supposed to make it so that we start the 
     # duration count when the car first starts moving and when the car first stops moving
     moving_start, moving_end = get_start_and_end_index(all_info)
-    print(moving_start)
-    print(moving_end)
     all_info = all_info[moving_start:moving_end+1]
     route_coords = route_coords[moving_start:moving_end+1]
 
     print("speed at start: ", all_info[0]["speed"])
     print("speed at end: ", all_info[-1]["speed"])
 
-    print("size of the route_coords: ", len(route_coords))
+    # print("size of the route_coords: ", len(route_coords))
 
     # TODO here is where i would put the simplify route function -- issue here is that 
+    # decided to not use this bc it messed with the data points too much
     # after filtering out some of the straight points, it no longer follows the curve of the road
     # route_coords = filter_route(route_coords)
 
-    print("size of the route_coords: ", len(route_coords))
+    # print("size of the route_coords: ", len(route_coords))
 
+    # split paths if number of points exceed the MAX_POINTS
+    for i in range(0, len(route_coords), MAX_POINTS):
+        chunk = route_coords[i: i+MAX_POINTS]
+        # A. A yellow line along the route of travel - Compl Below 
+        line = kml.newlinestring(name="GPS Route")
+        line.coords = chunk
+        line.extrude = 1 #Task: tell google earth to draw line to ground 
 
-    # A. A yellow line along the route of travel - Compl Below 
-    line = kml.newlinestring(name="GPS Route")
-    line.coords = route_coords
-    line.extrude = 1 #Task: tell google earth to draw line to ground 
+        # B. Do not worry about the altitude. You can set that a 3 meters or something fixed.
+        line.altitudemode = simplekml.AltitudeMode.clamptoground #Task: tell gooogle earth how to view
 
-    # B. Do not worry about the altitude. You can set that a 3 meters or something fixed.
-    line.altitudemode = simplekml.AltitudeMode.clamptoground #Task: tell gooogle earth how to view
-
-    #A1 - Styling Below 
-    line.style.linestyle.width = 3
-    line.style.linestyle.color = simplekml.Color.yellow
+        #A1 - Styling Below 
+        line.style.linestyle.width = 3
+        line.style.linestyle.color = simplekml.Color.yellow
 
     # Mark the start and end of the route with green(start) and blue(end)
     # TODO remove this if necessary for submission
@@ -518,10 +497,10 @@ def makeKMLFile(gps_data,num):
 
         # check to see if the gps file started or stopped while the car is in motion
         if start["speed"] > MOVING:
-            print("GPS file started while the car was in motion")
+            print("GPS file started while the car was in motion. The total duration will be an estimate.")
             start_mov = True
         if end["speed"] > MOVING:
-            print("GPS file ended while the car was in motion")
+            print("GPS file ended while the car was in motion. The total duration will be an estimate.")
             end_mov = True
 
         start_pt = kml.newpoint(
@@ -541,9 +520,11 @@ def makeKMLFile(gps_data,num):
         end_pt.description = f"End time: {end['date_time']}"
 
         if start_mov:
-            missing_s = estimate_start(all_info, 0)
+            missing_s = estimate_missing(all_info, 0)
+            # print(missing_s)
         if end_mov:
-            missing_e = estimate_end(all_info, -1)
+            missing_e = estimate_missing(all_info, -1)
+            # print(missing_e)
 
         # get the trip duration as the first and last gps data 
         start_dt = datetime.datetime.strptime(start["date_time"], "%Y-%m-%dT%H:%M:%SZ")
@@ -602,8 +583,8 @@ def makeKMLFile(gps_data,num):
                 current_stop = []
 
    
-    print("file complete")
-    kml.save(f"gps_data_{num}.kml")##WHEN COMPL UNCOMMENT 
+    # print("file complete")
+    kml.save(f"gps_data_from_kml.kml")
 
 
 
@@ -612,29 +593,31 @@ def main():
     Main
 
     """
-    # data = readFile(sys.argv[1:])
+    if len(sys.argv) > 1:
+        data = readFile(sys.argv[1])
+        makeKMLFile(data[0])
+    else:
+        print("Missing the gps file. Try again.")
+
+
     # data = readFile()
-    data = readFile("Some_Example_GPS_Files/2025_05_01__145019_gps_file.txt")
-    # data = readFile("Some_Example_GPS_Files/2025_05_06__021707_gps_file.txt")
-    # data = readFile("Some_Example_GPS_Files/2025_05_06__134918_gps_file.txt")
-    # data = readFile("Some_Example_GPS_Files/2025_05_06__174741_gps_file.txt")
-    # data = readFile("Some_Example_GPS_Files/2025_05_06__211533_gps_file.txt")
-    # data = readFile("Some_Example_GPS_Files/2025_08_27__144259_gps_file.txt")
-    # data = readFile("Some_Example_GPS_Files/2025_08_27__171823_gps_file.txt")
-    # data = readFile("Some_Example_GPS_Files/2025_08_27__225846_gps_file.txt")
-    # data = readFile("Some_Example_GPS_Files/2025_09_02__134904_gps_file.txt")
-    # data = readFile("Some_Example_GPS_Files/2025_09_05__160041_gps_file.txt")
-    # data = readFile("Some_Example_GPS_Files/2025_09_07__195700_gps_file.txt")
-    # data = readFile("Some_Example_GPS_Files/2025_09_08__223135_gps_file.txt")
-    # data = readFile("Some_Example_GPS_Files/2025_09_08__Home_to_RIT.txt")
-    # data = readFile("Some_Example_GPS_Files/2025_09_10__172025_gps_file.txt")
-    # data = readFile("Some_Example_GPS_Files/2025_09_10__230616_gps_file.txt")
-    # data = readFile("Some_Example_GPS_Files/2025_09_11__221355_gps_file.txt")
-    num = 1
+    # data = readFile("Some_Example_GPS_Files/2025_05_01__145019_gps_file.txt")       # home to rit
+    # data = readFile("Some_Example_GPS_Files/2025_05_06__021707_gps_file.txt")           # started while in motion, rit to home
+    # data = readFile("Some_Example_GPS_Files/2025_05_06__134918_gps_file.txt")           # home to rit w funky jumps (taken care of)
+    # data = readFile("Some_Example_GPS_Files/2025_05_06__174741_gps_file.txt")               # starts in motion and ends in motion -- goes from rit to wegmans and back to rit
+    # data = readFile("Some_Example_GPS_Files/2025_05_06__211533_gps_file.txt")               # rit to house, no issues 
+    # data = readFile("Some_Example_GPS_Files/2025_08_27__144259_gps_file.txt")               # rit to house, no issues
+    # data = readFile("Some_Example_GPS_Files/2025_08_27__171823_gps_file.txt")                   # house to rit, no issues
+    # data = readFile("Some_Example_GPS_Files/2025_08_27__225846_gps_file.txt")                   # rit to house, no issues
+    # data = readFile("Some_Example_GPS_Files/2025_09_02__134904_gps_file.txt")                   # home to rit, no issues
+    # data = readFile("Some_Example_GPS_Files/2025_09_05__160041_gps_file.txt")                   # home to rit, marked as started while in motion but speed was marked as like 2mph
+    # data = readFile("Some_Example_GPS_Files/2025_09_07__195700_gps_file.txt")                   # went from middle of a road, maybe a stop? to wild wings parking lot...no recorded issues
+    # data = readFile("Some_Example_GPS_Files/2025_09_08__223135_gps_file.txt")                   # rit to some lot(?) says ended while car in motion but like its super close to parking, 1.85 knots was the speed, might just up the moving threshold
+    # data = readFile("Some_Example_GPS_Files/2025_09_08__Home_to_RIT.txt")                           # home to rit, started at 2.16 knots, ended at 12.1 knots
+    # data = readFile("Some_Example_GPS_Files/2025_09_10__172025_gps_file.txt")                       # house to rit, file started in motion
+    # data = readFile("Some_Example_GPS_Files/2025_09_10__230616_gps_file.txt")                       # rit to house, recorded car in motion at end w 3.08 knots...might just adjust the threshold
+    # data = readFile("Some_Example_GPS_Files/2025_09_11__221355_gps_file.txt")                       # rit to house, no issues
     
-    for arr in data: 
-        makeKMLFile(arr,num)
-        num = num +1
 
 
 if __name__ == "__main__":
